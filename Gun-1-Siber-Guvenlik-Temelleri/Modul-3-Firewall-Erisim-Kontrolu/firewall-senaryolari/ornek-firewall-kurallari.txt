@@ -1,0 +1,107 @@
+# ============================================================
+# ASKERI BİRİM FIREWALL KURAL SETİ ÖRNEĞİ
+# iptables formatında
+# ============================================================
+# DİKKAT: Bu kurallar eğitim amaçlıdır.
+# Gerçek ortamda kullanmadan önce güvenlik uzmanına danışın.
+# ============================================================
+
+# --- VARSAYILAN POLİTİKALAR ---
+# Varsayılan olarak tüm trafiği engelle (whitelist yaklaşımı)
+iptables -P INPUT DROP
+iptables -P FORWARD DROP
+iptables -P OUTPUT DROP
+
+# --- LOOPBACK ---
+# Localhost trafiğine izin ver
+iptables -A INPUT -i lo -j ACCEPT
+iptables -A OUTPUT -o lo -j ACCEPT
+
+# --- KURULU BAĞLANTILAR ---
+# Zaten kurulmuş bağlantıların devamına izin ver
+iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+iptables -A FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT
+
+# ============================================================
+# GELEN TRAFİK KURALLARI (INPUT / FORWARD - Dışarıdan İçeriye)
+# ============================================================
+
+# --- WEB SUNUCUSU (DMZ) ---
+# Dışarıdan web sunucusuna HTTPS erişimi
+iptables -A FORWARD -p tcp -d 10.0.3.10 --dport 443 -j ACCEPT
+
+# HTTP'yi HTTPS'e yönlendir (opsiyonel)
+iptables -t nat -A PREROUTING -p tcp -d 10.0.3.10 --dport 80 -j REDIRECT --to-port 443
+
+# --- DNS SUNUCUSU (DMZ) ---
+# Dışarıdan DNS sorgularına izin ver
+iptables -A FORWARD -p udp -d 10.0.3.20 --dport 53 -j ACCEPT
+iptables -A FORWARD -p tcp -d 10.0.3.20 --dport 53 -j ACCEPT
+
+# --- VPN SUNUCUSU (DMZ) ---
+# Dışarıdan VPN bağlantılarına izin ver (OpenVPN)
+iptables -A FORWARD -p udp -d 10.0.3.30 --dport 1194 -j ACCEPT
+
+# --- SSH ENGELLEMESİ ---
+# Dışarıdan tüm SSH bağlantılarını engelle
+iptables -A INPUT -p tcp --dport 22 -j DROP
+iptables -A FORWARD -p tcp --dport 22 -j DROP
+
+# --- ICMP (PING) ---
+# Dışarıdan gelen ping isteklerini engelle
+iptables -A INPUT -p icmp --icmp-type echo-request -j DROP
+iptables -A FORWARD -p icmp --icmp-type echo-request -s ! 10.0.0.0/16 -j DROP
+
+# ============================================================
+# GİDEN TRAFİK KURALLARI (OUTPUT / FORWARD - İçeriden Dışarıya)
+# ============================================================
+
+# --- PERSONEL AĞI (10.0.2.0/24) ---
+# Personel bilgisayarlarından HTTP/HTTPS çıkışı
+iptables -A FORWARD -p tcp -s 10.0.2.0/24 --dport 80 -j ACCEPT
+iptables -A FORWARD -p tcp -s 10.0.2.0/24 --dport 443 -j ACCEPT
+
+# Personel DNS çözümlemesi
+iptables -A FORWARD -p udp -s 10.0.2.0/24 -d 10.0.3.20 --dport 53 -j ACCEPT
+
+# --- KOMUTA AĞI (10.0.1.0/24) ---
+# Komuta ağından dışarıya TÜM trafiği engelle
+iptables -A FORWARD -s 10.0.1.0/24 -o eth0 -j DROP
+
+# Komuta ağına dışarıdan TÜM trafiği engelle
+iptables -A FORWARD -d 10.0.1.0/24 -i eth0 -j DROP
+
+# Komuta ağından iç sunuculara erişim (yalnızca belirli portlar)
+iptables -A FORWARD -s 10.0.1.0/24 -d 10.0.3.0/24 -p tcp --dport 443 -j ACCEPT
+
+# --- İÇ AĞ ICMP ---
+# İç ağdan ping'e izin ver
+iptables -A FORWARD -p icmp --icmp-type echo-request -s 10.0.0.0/16 -j ACCEPT
+
+# ============================================================
+# LOGLAMA KURALLARI
+# ============================================================
+
+# Engellenen trafiği logla
+iptables -A INPUT -j LOG --log-prefix "FW-INPUT-DROP: " --log-level 4
+iptables -A FORWARD -j LOG --log-prefix "FW-FORWARD-DROP: " --log-level 4
+
+# ============================================================
+# RATE LIMITING (DDoS Koruması)
+# ============================================================
+
+# Web sunucusuna gelen bağlantıları sınırla (saniyede 25 yeni bağlantı)
+iptables -A FORWARD -p tcp -d 10.0.3.10 --dport 443 -m state --state NEW -m limit --limit 25/second --limit-burst 100 -j ACCEPT
+
+# SYN flood koruması
+iptables -A FORWARD -p tcp --syn -m limit --limit 1/s --limit-burst 3 -j ACCEPT
+
+# ============================================================
+# SON KURAL - VARSAYILAN ENGELLEME
+# ============================================================
+# Yukarıdaki kurallarla eşleşmeyen tüm trafik engellenir
+# (Zaten varsayılan politika DROP olduğu için bu ek güvencedir)
+iptables -A INPUT -j DROP
+iptables -A FORWARD -j DROP
+iptables -A OUTPUT -j DROP
